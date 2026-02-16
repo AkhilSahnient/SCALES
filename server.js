@@ -397,6 +397,12 @@ setInterval(() => {
     }
 }, 60 * 1000);
 
+
+// test route for Railway
+app.get("/", (req, res) => {
+  res.send("Server is running 🚀");
+});
+
 // ============ START SERVER ============
 const PORT = process.env.PORT || 3000;
 
