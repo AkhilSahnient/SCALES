@@ -8,7 +8,7 @@ app.use(express.json());
 
 // ============ CORS MIDDLEWARE ============
 app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', 'http://localhost:3002');
+    res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, ngrok-skip-browser-warning');
     res.header('Access-Control-Allow-Credentials', 'true');
