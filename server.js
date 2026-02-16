@@ -297,16 +297,14 @@ app.post('/webhook', async (req, res) => {
             }
         }
         
-        // ============ CART CONVERTED HANDLER ============
-        else if (scope === 'store/cart/converted') {
-            console.log('💰 Cart converted');
-            console.log('   Data:', JSON.stringify(data, null, 2));
+    // ============ CART CONVERTED HANDLER ============
+            else if (scope === 'store/cart/converted') {
+             console.log('💰 Cart converted to order');
             
-            // The webhook data structure is different - we need to extract order_id
             const orderId = data.orderId || data.order_id || data.id;
             
             if (!orderId) {
-                console.log('   ⚠️  No order ID found in webhook\n');
+                console.log('   ⚠️  No order ID found\n');
                 return res.sendStatus(200);
             }
             
@@ -329,7 +327,7 @@ app.post('/webhook', async (req, res) => {
                 
                 console.log('   Customer ID:', customerId);
                 
-                // Check if customer is in VIP group
+                // Check if customer is in VIP group AND check their qualified date
                 const customerUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers?id:in=${customerId}`;
                 const customerResponse = await axios.get(customerUrl, { 
                     headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
@@ -338,41 +336,54 @@ app.post('/webhook', async (req, res) => {
                 const customer = customerResponse.data.data[0];
                 
                 if (customer && customer.customer_group_id === parseInt(VIP_GROUP_ID)) {
-                    console.log('   🎫 Customer is in VIP group - removing after using discount');
+                    // Check when they were qualified
+                    const qualifiedDate = await checkIfQualified(customerId);
                     
-                    // Remove from VIP group
-                    await removeFromVIPGroup(customerId);
-                    
-                    // Clear the qualified date (optional - allows re-qualification)
-                    try {
-                        const clearUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`;
-                        await axios.put(clearUrl, [{
-                            customer_id: customerId,
-                            attribute_id: parseInt(DATE_ATTRIBUTE_ID),
-                            value: '' // Clear the date
-                        }], { 
-                            headers: {
-                                'X-Auth-Token': BC_API_TOKEN,
-                                'Content-Type': 'application/json',
-                                'Accept': 'application/json'
+                    if (qualifiedDate) {
+                        const qualifiedTime = new Date(qualifiedDate).getTime();
+                        const nowTime = Date.now();
+                        const minutesSinceQualification = (nowTime - qualifiedTime) / (1000 * 60);
+                        
+                        // Only remove if they qualified more than 5 minutes ago
+                        // (This ensures they had time to browse and use the discount)
+                        if (minutesSinceQualification > 5) {
+                            console.log(`   🎫 Customer used VIP discount (qualified ${minutesSinceQualification.toFixed(0)} min ago) - removing`);
+                            
+                            // Remove from VIP group
+                            await removeFromVIPGroup(customerId);
+                            
+                            // Clear the qualified date
+                            try {
+                                const clearUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`;
+                                await axios.put(clearUrl, [{
+                                    customer_id: customerId,
+                                    attribute_id: parseInt(DATE_ATTRIBUTE_ID),
+                                    value: ''
+                                }], { 
+                                    headers: {
+                                        'X-Auth-Token': BC_API_TOKEN,
+                                        'Content-Type': 'application/json',
+                                        'Accept': 'application/json'
+                                    }
+                                });
+                                console.log('   ✅ Cleared qualification date');
+                            } catch (err) {
+                                console.log('   ⚠️  Could not clear date');
                             }
-                        });
-                        console.log('   ✅ Cleared qualification date');
-                    } catch (err) {
-                        console.log('   ⚠️  Could not clear date (may not exist)');
+                            
+                            console.log('   ✅ VIP discount used - customer can qualify again\n');
+                        } else {
+                            console.log(`   ℹ️  Customer just qualified (${minutesSinceQualification.toFixed(0)} min ago) - keeping in VIP group\n`);
+                        }
+                    } else {
+                        console.log('   ℹ️  No qualification date found\n');
                     }
-                    
-                    console.log('   ✅ VIP discount used - customer can qualify again\n');
                 } else {
-                    console.log('   ℹ️  Customer not in VIP group (may not have qualified)\n');
+                    console.log('   ℹ️  Customer not in VIP group\n');
                 }
                 
             } catch (error) {
-                console.error('   ❌ Error processing cart conversion:', error.message);
-                if (error.response) {
-                    console.error('   Status:', error.response.status);
-                    console.error('   Data:', JSON.stringify(error.response.data, null, 2));
-                }
+                console.error('   ❌ Error:', error.message);
                 console.log('');
             }
         }
