@@ -399,7 +399,6 @@ setInterval(() => {
 
 // ============ START SERVER ============
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log('🚀 Server running on port', PORT);
-    console.log('');
+app.listen(PORT, '::', () => {
+    console.log('Server running on port', PORT, '(IPv6)');
 });
