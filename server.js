@@ -230,23 +230,29 @@ app.post('/webhook', async (req, res) => {
                 
                 await removeFromVIPGroup(customerId);
                 
-                // Clear qualification date
+                // Delete qualification date attribute value
                 try {
-                    const clearUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`;
-                    await axios.put(clearUrl, [{
-                        customer_id: customerId,
-                        attribute_id: parseInt(DATE_ATTRIBUTE_ID),
-                        value: ''
-                    }], { 
-                        headers: {
-                            'X-Auth-Token': BC_API_TOKEN,
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json'
-                        }
+                    // First get the attribute value ID
+                    const getAttrUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values?customer_id:in=${customerId}`;
+                    const getAttrResponse = await axios.get(getAttrUrl, {
+                        headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
                     });
-                    console.log('   ✅ Cleared qualification date\n');
+                    
+                    const attrValues = getAttrResponse.data.data || [];
+                    const ourAttr = attrValues.find(av => av.attribute_id === parseInt(DATE_ATTRIBUTE_ID));
+                    
+                    if (ourAttr) {
+                        // Delete using the attribute value ID
+                        const deleteAttrUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values?id:in=${ourAttr.id}`;
+                        await axios.delete(deleteAttrUrl, {
+                            headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
+                        });
+                        console.log('   ✅ Deleted qualification date\n');
+                    } else {
+                        console.log('   ℹ️  No qualification date to delete\n');
+                    }
                 } catch (err) {
-                    console.log('   ⚠️  Could not clear date\n');
+                    console.log('   ⚠️  Could not delete date:', err.message, '\n');
                 }
                 
                 return res.sendStatus(200);
