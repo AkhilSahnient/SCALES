@@ -12,11 +12,7 @@ app.use((req, res, next) => {
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, ngrok-skip-browser-warning');
     res.header('Access-Control-Allow-Credentials', 'true');
-    
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
-    
+    if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
 });
 
@@ -25,7 +21,7 @@ const BC_STORE_HASH = process.env.BC_STORE_HASH;
 const BC_API_TOKEN = process.env.BC_API_TOKEN;
 const WEBHOOK_SECRET = process.env.BC_WEBHOOK_SECRET;
 const DATE_ATTRIBUTE_ID = process.env.DATE_ATTRIBUTE_ID;
-const VIP_GROUP_ID = process.env.VIP_GROUP_ID || 5;
+const VIP_GROUP_ID = process.env.VIP_GROUP_ID || 2;
 
 const MIN_QUANTITY = 5;
 const DISCOUNT_PERCENT = 35;
@@ -48,7 +44,6 @@ const processedWebhooks = new Set();
 
 // ============ HEALTH CHECK ============
 app.get('/health', (req, res) => {
-    console.log('💚 Health check');
     res.json({ 
         status: 'OK', 
         timestamp: new Date().toISOString(),
@@ -58,7 +53,9 @@ app.get('/health', (req, res) => {
             hasWebhookSecret: !!WEBHOOK_SECRET,
             dateAttributeId: DATE_ATTRIBUTE_ID,
             vipGroupId: VIP_GROUP_ID,
-            minQuantity: MIN_QUANTITY
+            minQuantity: MIN_QUANTITY,
+            discountPercent: DISCOUNT_PERCENT,
+            discountDays: DISCOUNT_DAYS
         }
     });
 });
@@ -67,49 +64,59 @@ app.get('/health', (req, res) => {
 app.get('/api/just-qualified/:customerId', (req, res) => {
     const customerId = parseInt(req.params.customerId);
     const qualified = recentlyQualified.has(customerId);
-    
     console.log(`🔍 Popup check for customer ${customerId}: ${qualified ? 'SHOW' : 'HIDE'}`);
-    
-    if (qualified) {
-        recentlyQualified.delete(customerId);
-    }
-    
+    if (qualified) recentlyQualified.delete(customerId);
     res.json({ justQualified: qualified });
 });
 
-// ============ HELPER: CHECK IF CUSTOMER IS QUALIFIED ============
-async function checkIfQualified(customerId) {
+// ============ HELPER: GET QUALIFICATION ATTRIBUTE ============
+async function getQualificationAttribute(customerId) {
     const url = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values?customer_id:in=${customerId}`;
-    
     try {
         const response = await axios.get(url, { 
             headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
         });
-        
         const attributeValues = response.data.data || [];
-        const dateAttr = attributeValues.find(av => 
+        return attributeValues.find(av => 
             av.customer_id === customerId && av.attribute_id === parseInt(DATE_ATTRIBUTE_ID)
-        );
-        
-        return dateAttr?.attribute_value || null;
+        ) || null;
     } catch (error) {
-        console.error('   Error checking qualification:', error.message);
+        console.error('   Error getting attribute:', error.message);
         return null;
     }
+}
+
+// ============ HELPER: CHECK IF QUALIFIED ============
+async function checkIfQualified(customerId) {
+    const attr = await getQualificationAttribute(customerId);
+    return attr?.attribute_value || null;
+}
+
+// ============ HELPER: CHECK EXPIRY ============
+async function checkExpiry(customerId) {
+    const attr = await getQualificationAttribute(customerId);
+    if (!attr || !attr.attribute_value) {
+        return { expired: true, daysLeft: 0, qualifiedDate: null, attrId: null };
+    }
+    const daysDiff = (Date.now() - new Date(attr.attribute_value).getTime()) / (1000 * 60 * 60 * 24);
+    return {
+        expired: daysDiff > DISCOUNT_DAYS,
+        daysLeft: Math.max(0, DISCOUNT_DAYS - daysDiff),
+        daysSince: daysDiff,
+        qualifiedDate: attr.attribute_value,
+        attrId: attr.id
+    };
 }
 
 // ============ HELPER: SET QUALIFIED DATE ============
 async function setQualifiedDate(customerId, date) {
     const url = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`;
-    
-    const payload = [{
-        customer_id: customerId,
-        attribute_id: parseInt(DATE_ATTRIBUTE_ID),
-        value: date
-    }];
-    
     try {
-        await axios.put(url, payload, { 
+        await axios.put(url, [{
+            customer_id: customerId,
+            attribute_id: parseInt(DATE_ATTRIBUTE_ID),
+            value: date
+        }], { 
             headers: {
                 'X-Auth-Token': BC_API_TOKEN,
                 'Content-Type': 'application/json',
@@ -123,17 +130,31 @@ async function setQualifiedDate(customerId, date) {
     }
 }
 
-// ============ HELPER: ADD CUSTOMER TO VIP GROUP ============
+// ============ HELPER: DELETE QUALIFICATION DATE ============
+async function deleteQualificationDate(customerId) {
+    try {
+        const attr = await getQualificationAttribute(customerId);
+        if (!attr) {
+            console.log('   ℹ️  No qualification date to delete');
+            return true;
+        }
+        const deleteUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values?id:in=${attr.id}`;
+        await axios.delete(deleteUrl, {
+            headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
+        });
+        console.log('   ✅ Deleted qualification date');
+        return true;
+    } catch (error) {
+        console.error('   Error deleting date:', error.message);
+        return false;
+    }
+}
+
+// ============ HELPER: ADD TO VIP GROUP ============
 async function addToVIPGroup(customerId) {
     const url = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers`;
-    
-    const payload = [{
-        id: customerId,
-        customer_group_id: parseInt(VIP_GROUP_ID)
-    }];
-    
     try {
-        await axios.put(url, payload, { 
+        await axios.put(url, [{ id: customerId, customer_group_id: parseInt(VIP_GROUP_ID) }], { 
             headers: {
                 'X-Auth-Token': BC_API_TOKEN,
                 'Content-Type': 'application/json',
@@ -148,24 +169,18 @@ async function addToVIPGroup(customerId) {
     }
 }
 
-// ============ HELPER: REMOVE CUSTOMER FROM VIP GROUP ============
+// ============ HELPER: REMOVE FROM VIP GROUP ============
 async function removeFromVIPGroup(customerId) {
     const url = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers`;
-    
-    const payload = [{
-        id: customerId,
-        customer_group_id: 0  // 0 = default group
-    }];
-    
     try {
-        await axios.put(url, payload, { 
+        await axios.put(url, [{ id: customerId, customer_group_id: 0 }], { 
             headers: {
                 'X-Auth-Token': BC_API_TOKEN,
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             }
         });
-        console.log(`   ✅ Removed from VIP group`);
+        console.log('   ✅ Removed from VIP group');
         return true;
     } catch (error) {
         console.error('   Error removing from VIP group:', error.message);
@@ -173,22 +188,58 @@ async function removeFromVIPGroup(customerId) {
     }
 }
 
+// ============ DAILY EXPIRY CHECK ============
+async function checkExpiredVIPCustomers() {
+    console.log('\n🔍 Running expiry check...');
+    try {
+        const attrUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`;
+        const attrResponse = await axios.get(attrUrl, { 
+            headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
+        });
+        
+        const allAttributes = attrResponse.data.data || [];
+        const qualifiedCustomers = allAttributes.filter(a => 
+            a.attribute_id === parseInt(DATE_ATTRIBUTE_ID) && a.attribute_value
+        );
+        
+        console.log(`   Found ${qualifiedCustomers.length} qualified customer(s)`);
+        
+        let expiredCount = 0;
+        for (const attr of qualifiedCustomers) {
+            const daysDiff = (Date.now() - new Date(attr.attribute_value).getTime()) / (1000 * 60 * 60 * 24);
+            if (daysDiff > DISCOUNT_DAYS) {
+                console.log(`   ⏰ Customer ${attr.customer_id} expired (${daysDiff.toFixed(0)} days)`);
+                await removeFromVIPGroup(attr.customer_id);
+                const deleteUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values?id:in=${attr.id}`;
+                await axios.delete(deleteUrl, {
+                    headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
+                });
+                expiredCount++;
+            }
+        }
+        
+        console.log(expiredCount === 0 
+            ? '   ✅ No expired customers\n' 
+            : `   ✅ Removed ${expiredCount} expired customer(s)\n`
+        );
+    } catch (error) {
+        console.error('   ❌ Error in expiry check:', error.message);
+    }
+}
+
 // ============ WEBHOOK ENDPOINT ============
 app.post('/webhook', async (req, res) => {
     // Deduplication
     const webhookId = `${req.body.scope}-${req.body.data?.id}-${req.body.created_at}`;
-    
     if (processedWebhooks.has(webhookId)) {
         console.log('⏭️  Duplicate webhook - skipping');
         return res.sendStatus(200);
     }
-    
     processedWebhooks.add(webhookId);
     setTimeout(() => processedWebhooks.delete(webhookId), 60000);
     
     console.log('\n📥 WEBHOOK RECEIVED:', new Date().toISOString());
     console.log('Scope:', req.body.scope);
-    console.log('Data:', JSON.stringify(req.body.data, null, 2));
     
     try {
         const { scope, data } = req.body;
@@ -199,7 +250,6 @@ app.post('/webhook', async (req, res) => {
             console.log('📦 Order created:', orderId);
             
             // Fetch order details
-            console.log('🔍 Fetching order details...');
             const orderUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v2/orders/${orderId}`;
             const headers = { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' };
             
@@ -223,44 +273,29 @@ app.post('/webhook', async (req, res) => {
             const customer = customerResponse.data.data[0];
             const isInVIPGroup = customer && customer.customer_group_id === parseInt(VIP_GROUP_ID);
             
+            console.log(`   VIP group: ${isInVIPGroup} (group_id: ${customer?.customer_group_id})`);
+            
+            // ---- CASE 1: Customer IS in VIP group - they're using their discount ----
             if (isInVIPGroup) {
-                // Customer is in VIP group - they just used their discount
-                console.log('   🎫 Customer is in VIP group - they used their discount');
-                console.log('   ✅ Removing from VIP group (can qualify again with next 5+ order)');
+                const expiry = await checkExpiry(customerId);
                 
-                await removeFromVIPGroup(customerId);
-                
-                // Delete qualification date attribute value
-                try {
-                    // First get the attribute value ID
-                    const getAttrUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values?customer_id:in=${customerId}`;
-                    const getAttrResponse = await axios.get(getAttrUrl, {
-                        headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
-                    });
-                    
-                    const attrValues = getAttrResponse.data.data || [];
-                    const ourAttr = attrValues.find(av => av.attribute_id === parseInt(DATE_ATTRIBUTE_ID));
-                    
-                    if (ourAttr) {
-                        // Delete using the attribute value ID
-                        const deleteAttrUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values?id:in=${ourAttr.id}`;
-                        await axios.delete(deleteAttrUrl, {
-                            headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
-                        });
-                        console.log('   ✅ Deleted qualification date\n');
-                    } else {
-                        console.log('   ℹ️  No qualification date to delete\n');
-                    }
-                } catch (err) {
-                    console.log('   ⚠️  Could not delete date:', err.message, '\n');
+                if (expiry.expired) {
+                    console.log(`   ⏰ VIP discount expired (${expiry.daysSince?.toFixed(0)} days since qualification)`);
+                } else {
+                    console.log(`   🎫 Customer used VIP discount! (${expiry.daysLeft.toFixed(0)} days were remaining)`);
                 }
                 
+                // Remove from VIP group
+                await removeFromVIPGroup(customerId);
+                
+                // Delete qualification date
+                await deleteQualificationDate(customerId);
+                
+                console.log('   ✅ Customer can re-qualify with next 5+ item order\n');
                 return res.sendStatus(200);
             }
             
-            // Customer is NOT in VIP group - check if this order qualifies them
-            
-            // Fetch order products
+            // ---- CASE 2: Customer NOT in VIP group - check if this order qualifies them ----
             console.log('📦 Fetching products...');
             const productsUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v2/orders/${orderId}/products`;
             const productsResponse = await axios.get(productsUrl, { headers });
@@ -278,37 +313,34 @@ app.post('/webhook', async (req, res) => {
                 return res.sendStatus(200);
             }
             
-            console.log(`   🎉 Order qualifies for VIP discount on NEXT order!`);
+            console.log(`   🎉 Order qualifies!`);
             
             // Qualify customer for NEXT order
             const today = new Date().toISOString().split('T')[0];
-            console.log(`\n🎊 QUALIFYING CUSTOMER ${customerId} for their NEXT order!`);
-            console.log(`   Date: ${today}`);
+            const expiryDate = new Date(Date.now() + DISCOUNT_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
             
-            // Set qualified date
+            console.log(`\n🎊 QUALIFYING CUSTOMER ${customerId}!`);
+            console.log(`   Qualified: ${today}`);
+            console.log(`   Expires:   ${expiryDate} (${DISCOUNT_DAYS} days)`);
+            
             const dateSuccess = await setQualifiedDate(customerId, today);
-            
-            // Add to VIP group
             const groupSuccess = await addToVIPGroup(customerId);
             
             if (dateSuccess && groupSuccess) {
-                // Verify
                 await new Promise(resolve => setTimeout(resolve, 1000));
                 const verifyDate = await checkIfQualified(customerId);
                 
                 if (verifyDate) {
                     console.log(`   ✅ CONFIRMED: ${verifyDate}`);
-                    console.log(`   🎫 Customer will see 35% off on their NEXT order\n`);
+                    console.log(`   🎫 Customer will see ${DISCOUNT_PERCENT}% off on their NEXT order\n`);
                     recentlyQualified.set(customerId, Date.now());
                 } else {
-                    console.log('   ⚠️  Could not verify attribute\n');
+                    console.log('   ⚠️  Could not verify\n');
                 }
             } else {
-                console.log('   ❌ Failed to fully qualify customer\n');
+                console.log('   ❌ Failed to qualify customer\n');
             }
         }
-        
-        // No cart/converted handler - timing issues
         
         res.sendStatus(200);
     } catch (error) {
@@ -317,12 +349,11 @@ app.post('/webhook', async (req, res) => {
             console.error('   Status:', error.response.status);
             console.error('   Data:', JSON.stringify(error.response.data, null, 2));
         }
-        console.log('');
         res.sendStatus(500);
     }
 });
 
-// ============ CLEANUP ============
+// ============ CLEANUP IN-MEMORY ============
 setInterval(() => {
     const expiry = Date.now() - 10 * 60 * 1000;
     for (const [id, ts] of recentlyQualified.entries()) {
@@ -330,16 +361,17 @@ setInterval(() => {
     }
 }, 60 * 1000);
 
-// Test route for Railway
-app.get("/", (req, res) => {
-  res.send("VIP Wholesale Discount Server 🚀");
-});
+// ============ RUN EXPIRY CHECK ============
+checkExpiredVIPCustomers();
+setInterval(checkExpiredVIPCustomers, 24 * 60 * 60 * 1000);
+
+// ============ ROOT ROUTE ============
+app.get('/', (req, res) => res.send('VIP Wholesale Discount Server 🚀'));
 
 // ============ START SERVER ============
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on port ${PORT} (0.0.0.0)`);
-    console.log(`   Health check: /health`);
-    console.log(`   Webhook endpoint: /webhook`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log('   Health:  /health');
+    console.log('   Webhook: /webhook\n');
 });
