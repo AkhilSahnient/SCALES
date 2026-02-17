@@ -25,7 +25,7 @@ const BC_STORE_HASH = process.env.BC_STORE_HASH;
 const BC_API_TOKEN = process.env.BC_API_TOKEN;
 const WEBHOOK_SECRET = process.env.BC_WEBHOOK_SECRET;
 const DATE_ATTRIBUTE_ID = process.env.DATE_ATTRIBUTE_ID;
-const VIP_GROUP_ID = process.env.VIP_GROUP_ID || 5; // Set this in your .env
+const VIP_GROUP_ID = process.env.VIP_GROUP_ID || 5;
 
 const MIN_QUANTITY = 5;
 const DISCOUNT_PERCENT = 35;
@@ -175,67 +175,146 @@ async function removeFromVIPGroup(customerId) {
 
 // ============ WEBHOOK ENDPOINT ============
 app.post('/webhook', async (req, res) => {
-    // Deduplication code stays same...
+    // Deduplication
+    const webhookId = `${req.body.scope}-${req.body.data?.id}-${req.body.created_at}`;
     
-    const { scope, data } = req.body;
-    console.log('📥 WEBHOOK:', scope);
+    if (processedWebhooks.has(webhookId)) {
+        console.log('⏭️  Duplicate webhook - skipping');
+        return res.sendStatus(200);
+    }
+    
+    processedWebhooks.add(webhookId);
+    setTimeout(() => processedWebhooks.delete(webhookId), 60000);
+    
+    console.log('\n📥 WEBHOOK RECEIVED:', new Date().toISOString());
+    console.log('Scope:', req.body.scope);
+    console.log('Data:', JSON.stringify(req.body.data, null, 2));
     
     try {
-        // ============ ORDER CREATED (VIP QUALIFICATION) ============
+        const { scope, data } = req.body;
+        
+        // ============ ORDER CREATED HANDLER ============
         if (scope === 'store/order/created') {
             const orderId = data.id;
-            console.log('📦 Processing order:', orderId);
+            console.log('📦 Order created:', orderId);
             
-            // Your existing order fetching logic...
+            // Fetch order details
+            console.log('🔍 Fetching order details...');
+            const orderUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v2/orders/${orderId}`;
+            const headers = { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' };
+            
+            const orderResponse = await axios.get(orderUrl, { headers });
+            const order = orderResponse.data;
             const customerId = order.customer_id;
             
+            console.log('   Customer ID:', customerId);
+            
             if (!customerId || customerId === 0) {
-                console.log('   ℹ️ Guest - skipping');
+                console.log('   ℹ️  Guest order - skipping\n');
                 return res.sendStatus(200);
             }
             
-            const totalQty = products.reduce((sum, p) => sum + p.quantity, 0);
-            console.log(`   Total qty: ${totalQty}`);
+            // Check if customer is currently in VIP group
+            const customerUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers?id:in=${customerId}`;
+            const customerResponse = await axios.get(customerUrl, { 
+                headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
+            });
             
-            if (totalQty >= MIN_QUANTITY) {
-                console.log(`   🎉 QUALIFYING ${customerId}!`);
+            const customer = customerResponse.data.data[0];
+            const isInVIPGroup = customer && customer.customer_group_id === parseInt(VIP_GROUP_ID);
+            
+            if (isInVIPGroup) {
+                // Customer is in VIP group - they just used their discount
+                console.log('   🎫 Customer is in VIP group - they used their discount');
+                console.log('   ✅ Removing from VIP group (can qualify again with next 5+ order)');
                 
-                // CRITICAL: Check existing qualification
-                const existingDate = await checkIfQualified(customerId);
-                if (existingDate) {
-                    console.log(`   ℹ️ Already qualified: ${existingDate}`);
-                    return res.sendStatus(200);
+                await removeFromVIPGroup(customerId);
+                
+                // Clear qualification date
+                try {
+                    const clearUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`;
+                    await axios.put(clearUrl, [{
+                        customer_id: customerId,
+                        attribute_id: parseInt(DATE_ATTRIBUTE_ID),
+                        value: ''
+                    }], { 
+                        headers: {
+                            'X-Auth-Token': BC_API_TOKEN,
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        }
+                    });
+                    console.log('   ✅ Cleared qualification date\n');
+                } catch (err) {
+                    console.log('   ⚠️  Could not clear date\n');
                 }
                 
-                // ADD TO VIP GROUP (this was missing!)
-                const today = new Date().toISOString().split('T')[0];
-                console.log(`   📅 Setting date: ${today}`);
-                
-                const dateSet = await setQualifiedDate(customerId, today);
-                const groupAdded = await addToVIPGroup(customerId);  // ← This line runs NOW
-                
-                console.log(`   Date: ${dateSet ? '✅' : '❌'}, Group: ${groupAdded ? '✅' : '❌'}`);
+                return res.sendStatus(200);
             }
-            return res.sendStatus(200);  // ← Move return INSIDE if block
-        }
-        
-        // ============ CART CONVERTED (REMOVE VIP AFTER USE) ============
-        if (scope === 'store/cart/converted') {  // ← Changed to if, not else if
-            console.log('💰 Cart converted, checking VIP usage...');
-            const orderId = data.orderId || data.id;
             
-            // Your existing cart converted logic...
-            return res.sendStatus(200);
+            // Customer is NOT in VIP group - check if this order qualifies them
+            
+            // Fetch order products
+            console.log('📦 Fetching products...');
+            const productsUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v2/orders/${orderId}/products`;
+            const productsResponse = await axios.get(productsUrl, { headers });
+            const products = productsResponse.data;
+            
+            const totalQty = products.reduce((sum, p) => {
+                console.log(`   - ${p.name}: qty ${p.quantity}`);
+                return sum + p.quantity;
+            }, 0);
+            
+            console.log(`   ✅ Total quantity: ${totalQty}`);
+            
+            if (totalQty < MIN_QUANTITY) {
+                console.log(`   ℹ️  Not qualifying (${totalQty} < ${MIN_QUANTITY})\n`);
+                return res.sendStatus(200);
+            }
+            
+            console.log(`   🎉 Order qualifies for VIP discount on NEXT order!`);
+            
+            // Qualify customer for NEXT order
+            const today = new Date().toISOString().split('T')[0];
+            console.log(`\n🎊 QUALIFYING CUSTOMER ${customerId} for their NEXT order!`);
+            console.log(`   Date: ${today}`);
+            
+            // Set qualified date
+            const dateSuccess = await setQualifiedDate(customerId, today);
+            
+            // Add to VIP group
+            const groupSuccess = await addToVIPGroup(customerId);
+            
+            if (dateSuccess && groupSuccess) {
+                // Verify
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                const verifyDate = await checkIfQualified(customerId);
+                
+                if (verifyDate) {
+                    console.log(`   ✅ CONFIRMED: ${verifyDate}`);
+                    console.log(`   🎫 Customer will see 35% off on their NEXT order\n`);
+                    recentlyQualified.set(customerId, Date.now());
+                } else {
+                    console.log('   ⚠️  Could not verify attribute\n');
+                }
+            } else {
+                console.log('   ❌ Failed to fully qualify customer\n');
+            }
         }
         
+        // No cart/converted handler - timing issues
+        
+        res.sendStatus(200);
     } catch (error) {
-        console.error('❌ WEBHOOK ERROR:', error.response?.data || error.message);
+        console.error('❌ Error:', error.message);
+        if (error.response) {
+            console.error('   Status:', error.response.status);
+            console.error('   Data:', JSON.stringify(error.response.data, null, 2));
+        }
+        console.log('');
         res.sendStatus(500);
     }
-    
-    res.sendStatus(200);
 });
-
 
 // ============ CLEANUP ============
 setInterval(() => {
@@ -245,16 +324,14 @@ setInterval(() => {
     }
 }, 60 * 1000);
 
-
-// test route for Railway
+// Test route for Railway
 app.get("/", (req, res) => {
-  res.send("Server is running 🚀");
+  res.send("VIP Wholesale Discount Server 🚀");
 });
 
 // ============ START SERVER ============
 const PORT = process.env.PORT || 3000;
 
-// CRITICAL: Must bind to '0.0.0.0' for Railway
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT} (0.0.0.0)`);
     console.log(`   Health check: /health`);
