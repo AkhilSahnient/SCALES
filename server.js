@@ -275,23 +275,26 @@ app.post('/webhook', async (req, res) => {
             
             console.log(`   VIP group: ${isInVIPGroup} (group_id: ${customer?.customer_group_id})`);
             
-            // ---- CASE 1: Customer IS in VIP group - they're using their discount ----
+            // ---- CASE 1: Customer IS in VIP group - check if expired ----
             if (isInVIPGroup) {
                 const expiry = await checkExpiry(customerId);
                 
                 if (expiry.expired) {
                     console.log(`   ⏰ VIP discount expired (${expiry.daysSince?.toFixed(0)} days since qualification)`);
+                    console.log('   Removing from VIP group...');
+                    
+                    // Remove from VIP group
+                    await removeFromVIPGroup(customerId);
+                    
+                    // Delete qualification date
+                    await deleteQualificationDate(customerId);
+                    
+                    console.log('   ✅ Discount expired - customer can re-qualify with next 5+ item order\n');
                 } else {
-                    console.log(`   🎫 Customer used VIP discount! (${expiry.daysLeft.toFixed(0)} days were remaining)`);
+                    console.log(`   ✅ Customer using VIP discount (${expiry.daysLeft.toFixed(0)} days remaining)`);
+                    console.log(`   🎫 Customer keeps 35% off for ${expiry.daysLeft.toFixed(0)} more days\n`);
                 }
                 
-                // Remove from VIP group
-                await removeFromVIPGroup(customerId);
-                
-                // Delete qualification date
-                await deleteQualificationDate(customerId);
-                
-                console.log('   ✅ Customer can re-qualify with next 5+ item order\n');
                 return res.sendStatus(200);
             }
             
