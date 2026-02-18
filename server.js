@@ -73,35 +73,30 @@ app.get('/health', (req, res) => {
 // ============ POPUP CHECK ENDPOINT (PRODUCTION SAFE) ============
 app.get('/api/just-qualified/:customerId', async (req, res) => {
     const customerId = parseInt(req.params.customerId);
-
+    
     try {
-        const qualifiedDate = await checkIfQualified(customerId);
-
-        if (!qualifiedDate) {
-            console.log(`🔍 Customer ${customerId}: NOT QUALIFIED`);
-            return res.json({ justQualified: false });
+        const expiry = await checkExpiry(customerId);
+        
+        if (expiry.expired || !expiry.qualifiedDate) {
+            console.log(`🔍 ${customerId}: EXPIRED (${expiry.daysSince?.toFixed(1)} days)`);
+            return res.json({ justQualified: false, status: 'expired' });
         }
-
-        const minutesSince =
-            (Date.now() - new Date(qualifiedDate).getTime()) / (1000 * 60);
-
-        // show popup if qualified within last 60 minutes
-        const justQualified = minutesSince < 60;
-
-        console.log(
-            `🔍 Customer ${customerId}: qualified ${minutesSince.toFixed(
-                1
-            )} mins ago → ${justQualified ? "SHOW" : "HIDE"}`
-        );
-
-        res.json({ justQualified });
-
+        
+        const justQualified = true;  // Show for ALL active VIPs
+        console.log(`🔍 ${customerId}: ACTIVE VIP (${expiry.daysLeft.toFixed(1)} days left) → SHOW`);
+        
+        res.json({ 
+            justQualified: true,
+            daysLeft: expiry.daysLeft,
+            discountPercent: DISCOUNT_PERCENT,
+            expires: expiry.qualifiedDate 
+        });
+        
     } catch (error) {
-        console.error("Popup check error:", error.message);
+        console.error('Popup error:', error);
         res.json({ justQualified: false });
     }
 });
-
 
 
 // ============ HELPER: GET QUALIFICATION ATTRIBUTE ============
