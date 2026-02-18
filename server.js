@@ -39,7 +39,7 @@ console.log('  Discount Days:', DISCOUNT_DAYS);
 console.log('');
 
 // ============ IN-MEMORY STORES ============
-const recentlyQualified = new Map();
+//const recentlyQualified = new Map();
 const processedWebhooks = new Set();
 
 // ============ HEALTH CHECK ============
@@ -61,13 +61,48 @@ app.get('/health', (req, res) => {
 });
 
 // ============ POPUP CHECK ENDPOINT ============
-app.get('/api/just-qualified/:customerId', (req, res) => {
+// app.get('/api/just-qualified/:customerId', (req, res) => {
+//     const customerId = parseInt(req.params.customerId);
+//     const qualified = recentlyQualified.has(customerId);
+//     console.log(`🔍 Popup check for customer ${customerId}: ${qualified ? 'SHOW' : 'HIDE'}`);
+//     if (qualified) recentlyQualified.delete(customerId);
+//     res.json({ justQualified: qualified });
+// });
+
+
+// ============ POPUP CHECK ENDPOINT (PRODUCTION SAFE) ============
+app.get('/api/just-qualified/:customerId', async (req, res) => {
     const customerId = parseInt(req.params.customerId);
-    const qualified = recentlyQualified.has(customerId);
-    console.log(`🔍 Popup check for customer ${customerId}: ${qualified ? 'SHOW' : 'HIDE'}`);
-    if (qualified) recentlyQualified.delete(customerId);
-    res.json({ justQualified: qualified });
+
+    try {
+        const qualifiedDate = await checkIfQualified(customerId);
+
+        if (!qualifiedDate) {
+            console.log(`🔍 Customer ${customerId}: NOT QUALIFIED`);
+            return res.json({ justQualified: false });
+        }
+
+        const minutesSince =
+            (Date.now() - new Date(qualifiedDate).getTime()) / (1000 * 60);
+
+        // show popup if qualified within last 60 minutes
+        const justQualified = minutesSince < 60;
+
+        console.log(
+            `🔍 Customer ${customerId}: qualified ${minutesSince.toFixed(
+                1
+            )} mins ago → ${justQualified ? "SHOW" : "HIDE"}`
+        );
+
+        res.json({ justQualified });
+
+    } catch (error) {
+        console.error("Popup check error:", error.message);
+        res.json({ justQualified: false });
+    }
 });
+
+
 
 // ============ HELPER: GET QUALIFICATION ATTRIBUTE ============
 async function getQualificationAttribute(customerId) {
@@ -336,7 +371,7 @@ app.post('/webhook', async (req, res) => {
                 if (verifyDate) {
                     console.log(`   ✅ CONFIRMED: ${verifyDate}`);
                     console.log(`   🎫 Customer will see ${DISCOUNT_PERCENT}% off on their NEXT order\n`);
-                    recentlyQualified.set(customerId, Date.now());
+                    //recentlyQualified.set(customerId, Date.now());
                 } else {
                     console.log('   ⚠️  Could not verify\n');
                 }
@@ -357,12 +392,12 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ============ CLEANUP IN-MEMORY ============
-setInterval(() => {
-    const expiry = Date.now() - 10 * 60 * 1000;
-    for (const [id, ts] of recentlyQualified.entries()) {
-        if (ts < expiry) recentlyQualified.delete(id);
-    }
-}, 60 * 1000);
+// setInterval(() => {
+//     const expiry = Date.now() - 10 * 60 * 1000;
+//     for (const [id, ts] of recentlyQualified.entries()) {
+//         if (ts < expiry) recentlyQualified.delete(id);
+//     }
+// }, 60 * 1000);
 
 // ============ RUN EXPIRY CHECK ============
 checkExpiredVIPCustomers();
