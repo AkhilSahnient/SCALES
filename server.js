@@ -23,7 +23,7 @@ const WEBHOOK_SECRET = process.env.BC_WEBHOOK_SECRET;
 const DATE_ATTRIBUTE_ID = process.env.DATE_ATTRIBUTE_ID;
 const VIP_GROUP_ID = process.env.VIP_GROUP_ID || 2;
 
-const MIN_QUANTITY = 5;
+const MIN_QUANTITY = 2000;
 const DISCOUNT_PERCENT = 35;
 const DISCOUNT_DAYS = 90;
 
