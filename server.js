@@ -39,7 +39,7 @@ console.log('  Discount Days:', DISCOUNT_DAYS);
 console.log('');
 
 // ============ IN-MEMORY STORES ============
-//const recentlyQualified = new Map();
+const recentlyQualified = new Map();
 const processedWebhooks = new Set();
 
 // ============ HEALTH CHECK ============
@@ -60,44 +60,80 @@ app.get('/health', (req, res) => {
     });
 });
 
+// ============ VIP INFO ENDPOINT ============
+app.get('/api/vip-info', (req, res) => {
+    res.json({
+        vipGroupId: parseInt(VIP_GROUP_ID),
+        discountPercent: DISCOUNT_PERCENT,
+        minQuantity: MIN_QUANTITY,
+        discountDays: DISCOUNT_DAYS
+    });
+});
+
 // ============ POPUP CHECK ENDPOINT ============
-// app.get('/api/just-qualified/:customerId', (req, res) => {
-//     const customerId = parseInt(req.params.customerId);
-//     const qualified = recentlyQualified.has(customerId);
-//     console.log(`🔍 Popup check for customer ${customerId}: ${qualified ? 'SHOW' : 'HIDE'}`);
-//     if (qualified) recentlyQualified.delete(customerId);
-//     res.json({ justQualified: qualified });
-// });
-
-
-// ============ POPUP CHECK ENDPOINT (PRODUCTION SAFE) ============
 app.get('/api/just-qualified/:customerId', async (req, res) => {
     const customerId = parseInt(req.params.customerId);
     
+    console.log(`🔍 Popup check for customer ${customerId}`);
+    
     try {
-        const expiry = await checkExpiry(customerId);
+        // Check if customer is in VIP group
+        const customerUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers?id:in=${customerId}`;
+        const customerResponse = await axios.get(customerUrl, { 
+            headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
+        });
         
-        if (expiry.expired || !expiry.qualifiedDate) {
-            console.log(`🔍 ${customerId}: EXPIRED (${expiry.daysSince?.toFixed(1)} days)`);
-            return res.json({ justQualified: false, status: 'expired' });
+        const customer = customerResponse.data.data[0];
+        const isInVIPGroup = customer && customer.customer_group_id === parseInt(VIP_GROUP_ID);
+        
+        if (!isInVIPGroup) {
+            console.log(`   ❌ NOT in VIP group`);
+            return res.json({ 
+                justQualified: false,
+                isVIP: false,
+                daysLeft: 0
+            });
         }
         
-        const justQualified = true;  // Show for ALL active VIPs
-        console.log(`🔍 ${customerId}: ACTIVE VIP (${expiry.daysLeft.toFixed(1)} days left) → SHOW`);
+        // Get qualification date and check expiry
+        const expiry = await checkExpiry(customerId);
+        
+        if (!expiry.qualifiedDate || expiry.expired) {
+            console.log(`   ❌ No valid qualification or expired`);
+            return res.json({ 
+                justQualified: false,
+                isVIP: false,
+                daysLeft: 0
+            });
+        }
+        
+        // Check if RECENTLY qualified (for popup)
+        const showPopup = recentlyQualified.has(customerId);
+        
+        if (showPopup) {
+            recentlyQualified.delete(customerId);
+            console.log(`   🎉 SHOW POPUP - Just qualified! (${expiry.daysLeft.toFixed(0)} days left)`);
+        } else {
+            console.log(`   ℹ️  Is VIP but no popup (qualified ${expiry.daysSince?.toFixed(0)} days ago)`);
+        }
         
         res.json({ 
-            justQualified: true,
-            daysLeft: expiry.daysLeft,
+            justQualified: showPopup,
+            isVIP: true,
+            daysLeft: Math.floor(expiry.daysLeft),
             discountPercent: DISCOUNT_PERCENT,
-            expires: expiry.qualifiedDate 
+            qualifiedDate: expiry.qualifiedDate
         });
         
     } catch (error) {
-        console.error('Popup error:', error);
-        res.json({ justQualified: false });
+        console.error(`   ❌ Error:`, error.message);
+        res.json({ 
+            justQualified: false,
+            isVIP: false,
+            daysLeft: 0
+        });
     }
 });
-
 
 // ============ HELPER: GET QUALIFICATION ATTRIBUTE ============
 async function getQualificationAttribute(customerId) {
@@ -259,7 +295,6 @@ async function checkExpiredVIPCustomers() {
 
 // ============ WEBHOOK ENDPOINT ============
 app.post('/webhook', async (req, res) => {
-    // Deduplication
     const webhookId = `${req.body.scope}-${req.body.data?.id}-${req.body.created_at}`;
     if (processedWebhooks.has(webhookId)) {
         console.log('⏭️  Duplicate webhook - skipping');
@@ -274,12 +309,10 @@ app.post('/webhook', async (req, res) => {
     try {
         const { scope, data } = req.body;
         
-        // ============ ORDER CREATED HANDLER ============
         if (scope === 'store/order/created') {
             const orderId = data.id;
             console.log('📦 Order created:', orderId);
             
-            // Fetch order details
             const orderUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v2/orders/${orderId}`;
             const headers = { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' };
             
@@ -294,7 +327,6 @@ app.post('/webhook', async (req, res) => {
                 return res.sendStatus(200);
             }
             
-            // Check if customer is currently in VIP group
             const customerUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers?id:in=${customerId}`;
             const customerResponse = await axios.get(customerUrl, { 
                 headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
@@ -303,32 +335,22 @@ app.post('/webhook', async (req, res) => {
             const customer = customerResponse.data.data[0];
             const isInVIPGroup = customer && customer.customer_group_id === parseInt(VIP_GROUP_ID);
             
-            console.log(`   VIP group: ${isInVIPGroup} (group_id: ${customer?.customer_group_id})`);
+            console.log(`   VIP status: ${isInVIPGroup}`);
             
-            // ---- CASE 1: Customer IS in VIP group - check if expired ----
             if (isInVIPGroup) {
                 const expiry = await checkExpiry(customerId);
                 
                 if (expiry.expired) {
-                    console.log(`   ⏰ VIP discount expired (${expiry.daysSince?.toFixed(0)} days since qualification)`);
-                    console.log('   Removing from VIP group...');
-                    
-                    // Remove from VIP group
+                    console.log(`   ⏰ VIP expired (${expiry.daysSince?.toFixed(0)} days) - removing`);
                     await removeFromVIPGroup(customerId);
-                    
-                    // Delete qualification date
                     await deleteQualificationDate(customerId);
-                    
-                    console.log('   ✅ Discount expired - customer can re-qualify with next 5+ item order\n');
                 } else {
-                    console.log(`   ✅ Customer using VIP discount (${expiry.daysLeft.toFixed(0)} days remaining)`);
-                    console.log(`   🎫 Customer keeps 35% off for ${expiry.daysLeft.toFixed(0)} more days\n`);
+                    console.log(`   ✅ VIP active (${expiry.daysLeft.toFixed(0)} days left)\n`);
                 }
                 
                 return res.sendStatus(200);
             }
             
-            // ---- CASE 2: Customer NOT in VIP group - check if this order qualifies them ----
             console.log('📦 Fetching products...');
             const productsUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v2/orders/${orderId}/products`;
             const productsResponse = await axios.get(productsUrl, { headers });
@@ -339,22 +361,21 @@ app.post('/webhook', async (req, res) => {
                 return sum + p.quantity;
             }, 0);
             
-            console.log(`   ✅ Total quantity: ${totalQty}`);
+            console.log(`   ✅ Total: ${totalQty}`);
             
             if (totalQty < MIN_QUANTITY) {
                 console.log(`   ℹ️  Not qualifying (${totalQty} < ${MIN_QUANTITY})\n`);
                 return res.sendStatus(200);
             }
             
-            console.log(`   🎉 Order qualifies!`);
+            console.log(`   🎉 QUALIFIES!`);
             
-            // Qualify customer for NEXT order
             const today = new Date().toISOString().split('T')[0];
             const expiryDate = new Date(Date.now() + DISCOUNT_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
             
-            console.log(`\n🎊 QUALIFYING CUSTOMER ${customerId}!`);
-            console.log(`   Qualified: ${today}`);
-            console.log(`   Expires:   ${expiryDate} (${DISCOUNT_DAYS} days)`);
+            console.log(`\n🎊 QUALIFYING ${customerId}`);
+            console.log(`   Start: ${today}`);
+            console.log(`   End:   ${expiryDate}`);
             
             const dateSuccess = await setQualifiedDate(customerId, today);
             const groupSuccess = await addToVIPGroup(customerId);
@@ -364,14 +385,16 @@ app.post('/webhook', async (req, res) => {
                 const verifyDate = await checkIfQualified(customerId);
                 
                 if (verifyDate) {
-                    console.log(`   ✅ CONFIRMED: ${verifyDate}`);
-                    console.log(`   🎫 Customer will see ${DISCOUNT_PERCENT}% off on their NEXT order\n`);
-                    //recentlyQualified.set(customerId, Date.now());
+                    console.log(`   ✅ CONFIRMED`);
+                    
+                    // THIS IS KEY: Add to recentlyQualified for popup
+                    recentlyQualified.set(customerId, Date.now());
+                    console.log(`   🔔 Popup enabled for customer ${customerId}\n`);
                 } else {
                     console.log('   ⚠️  Could not verify\n');
                 }
             } else {
-                console.log('   ❌ Failed to qualify customer\n');
+                console.log('   ❌ Failed\n');
             }
         }
         
@@ -380,19 +403,21 @@ app.post('/webhook', async (req, res) => {
         console.error('❌ Error:', error.message);
         if (error.response) {
             console.error('   Status:', error.response.status);
-            console.error('   Data:', JSON.stringify(error.response.data, null, 2));
         }
         res.sendStatus(500);
     }
 });
 
-// ============ CLEANUP IN-MEMORY ============
-// setInterval(() => {
-//     const expiry = Date.now() - 10 * 60 * 1000;
-//     for (const [id, ts] of recentlyQualified.entries()) {
-//         if (ts < expiry) recentlyQualified.delete(id);
-//     }
-// }, 60 * 1000);
+// ============ CLEANUP RECENTLY QUALIFIED MAP ============
+setInterval(() => {
+    const expiry = Date.now() - 10 * 60 * 1000; // 10 minutes
+    for (const [id, ts] of recentlyQualified.entries()) {
+        if (ts < expiry) {
+            recentlyQualified.delete(id);
+            console.log(`🧹 Cleaned up popup flag for customer ${id}`);
+        }
+    }
+}, 60 * 1000);
 
 // ============ RUN EXPIRY CHECK ============
 checkExpiredVIPCustomers();
@@ -406,5 +431,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log('   Health:  /health');
-    console.log('   Webhook: /webhook\n');
+    console.log('   Webhook: /webhook');
+    console.log('   VIP Info: /api/vip-info');
+    console.log('   Popup: /api/just-qualified/:customerId\n');
 });
