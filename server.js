@@ -435,3 +435,8 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log('   VIP Info: /api/vip-info');
     console.log('   Popup: /api/just-qualified/:customerId\n');
 });
+
+app.post('/api/trigger-expiry-check', async (req, res) => {
+    await checkExpiredVIPCustomers();
+    res.json({ status: 'done' });
+});
