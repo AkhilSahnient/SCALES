@@ -25,9 +25,9 @@ const VIP_GROUP_ID = process.env.VIP_GROUP_ID || 2;
 
 const MIN_QUANTITY = 2000;
 const DISCOUNT_PERCENT = 35;
-const DISCOUNT_DAYS = 90;
+const DISCOUNT_DAYS = 1;
 
-console.log('🔧 CONFIGURATION:');
+console.log('CONFIGURATION:');
 console.log('  Store Hash:', BC_STORE_HASH);
 console.log('  API Token:', BC_API_TOKEN ? '***' + BC_API_TOKEN.slice(-4) : 'MISSING');
 console.log('  Webhook Secret:', WEBHOOK_SECRET ? 'SET' : 'NOT SET');
