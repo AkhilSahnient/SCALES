@@ -108,7 +108,7 @@ app.get('/api/just-qualified/:customerId', async (req, res) => {
         }
         
         // Check if RECENTLY qualified (for popup)
-        const showPopup = recentlyQualified.has(customerId);
+        const showPopup = expiry.daysLeft > 0;
         
         if (showPopup) {
             recentlyQualified.delete(customerId);
