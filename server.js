@@ -371,10 +371,10 @@ app.post('/webhook', async (req, res) => {
             console.log(`   🎉 QUALIFIES!`);
             
             //const today = new Date().toISOString().split('T')[0];
-            const today = new Date().toISOString(); 
             //const expiryDate = new Date(Date.now() + DISCOUNT_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-            const expiryDate = new Date(Date.now() + DISCOUNT_DAYS * 24 * 60 * 60 * 1000).toISOString();
-            
+            const today = new Date().toISOString(); // ← remove the .split('T')[0]
+            const expiryDate = new Date(Date.now() + DISCOUNT_DAYS * 24 * 60 * 60 * 1000).toISOString(); // ← remove the .split('T')[0]     
+
             console.log(`\n🎊 QUALIFYING ${customerId}`);
             console.log(`   Start: ${today}`);
             console.log(`   End:   ${expiryDate}`);
