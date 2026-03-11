@@ -111,7 +111,7 @@ app.get('/api/just-qualified/:customerId', async (req, res) => {
         const showPopup = expiry.daysLeft > 0;
         
         if (showPopup) {
-            recentlyQualified.delete(customerId);
+            //recentlyQualified.delete(customerId);
             console.log(`   🎉 SHOW POPUP - Just qualified! (${expiry.daysLeft.toFixed(0)} days left)`);
         } else {
             console.log(`   ℹ️  Is VIP but no popup (qualified ${expiry.daysSince?.toFixed(0)} days ago)`);
