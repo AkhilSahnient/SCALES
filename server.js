@@ -121,8 +121,9 @@ app.get('/api/just-qualified/:customerId', async (req, res) => {
             justQualified: showPopup,
             isVIP: true,
             daysLeft: expiry.daysLeft,
+            minutesLeft: expiry.minutesLeft, // ← add this
             discountPercent: DISCOUNT_PERCENT,
-            qualifiedDate: expiry.qualifiedDate
+            qualifiedDate: expiry.qualifiedDate,
         });
         
     } catch (error) {
@@ -164,14 +165,17 @@ async function checkExpiry(customerId) {
     if (!attr || !attr.attribute_value) {
         return { expired: true, daysLeft: 0, qualifiedDate: null, attrId: null };
     }
-    const daysDiff = (Date.now() - new Date(attr.attribute_value).getTime()) / (1000 * 60 * 60 * 24);
-    return {
-        expired: daysDiff > DISCOUNT_DAYS,
-        daysLeft: Math.max(0, DISCOUNT_DAYS - daysDiff),
-        daysSince: daysDiff,
-        qualifiedDate: attr.attribute_value,
-        attrId: attr.id
-    };
+// In checkExpiry function, return minutes left too
+const daysDiff = (Date.now() - new Date(attr.attribute_value).getTime()) / (1000 * 60 * 60 * 24);
+const minutesLeft = Math.max(0, (DISCOUNT_DAYS - daysDiff) * 24 * 60);
+return {
+    expired: daysDiff > DISCOUNT_DAYS,
+    daysLeft: Math.max(0, DISCOUNT_DAYS - daysDiff),
+    minutesLeft: Math.floor(minutesLeft), // ← add this
+    daysSince: daysDiff,
+    qualifiedDate: attr.attribute_value,
+    attrId: attr.id
+};
 }
 
 // ============ HELPER: SET QUALIFIED DATE ============
