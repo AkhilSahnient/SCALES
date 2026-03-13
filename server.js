@@ -120,7 +120,7 @@ app.get('/api/just-qualified/:customerId', async (req, res) => {
         res.json({ 
             justQualified: showPopup,
             isVIP: true,
-            daysLeft: Math.floor(expiry.daysLeft),
+            daysLeft: expiry.daysLeft,
             discountPercent: DISCOUNT_PERCENT,
             qualifiedDate: expiry.qualifiedDate
         });
