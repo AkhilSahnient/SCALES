@@ -5,7 +5,8 @@ const BC_STORE_HASH = process.env.BC_STORE_HASH;
 const BC_API_TOKEN = process.env.BC_API_TOKEN;
 
 // Use your live ngrok URL + /webhook
-const DESTINATION = 'https://prerepublican-harmless-latasha.ngrok-free.dev'; 
+//const DESTINATION = 'https://prerepublican-harmless-latasha.ngrok-free.dev/webhook'; 
+const DESTINATION = 'https://scales-production.up.railway.app/webhook'; 
 
 async function createWebhook(scope) {
   const url = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/hooks`;
