@@ -25,7 +25,7 @@ const VIP_GROUP_ID = process.env.VIP_GROUP_ID || 2;
 
 const MIN_QUANTITY = 2000;
 const DISCOUNT_PERCENT = 35;
-const DISCOUNT_DAYS = 0.005;
+const DISCOUNT_DAYS = 90;
 
 console.log('CONFIGURATION:');
 console.log('  Store Hash:', BC_STORE_HASH);
@@ -108,10 +108,10 @@ app.get('/api/just-qualified/:customerId', async (req, res) => {
         }
         
         // Check if RECENTLY qualified (for popup)
-        const showPopup = expiry.daysLeft > 0;
+        const showPopup = recentlyQualified.has(customerId);
         
         if (showPopup) {
-            //recentlyQualified.delete(customerId);
+            recentlyQualified.delete(customerId);
             console.log(`   🎉 SHOW POPUP - Just qualified! (${expiry.daysLeft.toFixed(0)} days left)`);
         } else {
             console.log(`   ℹ️  Is VIP but no popup (qualified ${expiry.daysSince?.toFixed(0)} days ago)`);
@@ -120,10 +120,9 @@ app.get('/api/just-qualified/:customerId', async (req, res) => {
         res.json({ 
             justQualified: showPopup,
             isVIP: true,
-            daysLeft: expiry.daysLeft,
-            minutesLeft: expiry.minutesLeft, // ← add this
+            daysLeft: Math.floor(expiry.daysLeft),
             discountPercent: DISCOUNT_PERCENT,
-            qualifiedDate: expiry.qualifiedDate,
+            qualifiedDate: expiry.qualifiedDate
         });
         
     } catch (error) {
@@ -165,17 +164,14 @@ async function checkExpiry(customerId) {
     if (!attr || !attr.attribute_value) {
         return { expired: true, daysLeft: 0, qualifiedDate: null, attrId: null };
     }
-// In checkExpiry function, return minutes left too
-const daysDiff = (Date.now() - new Date(attr.attribute_value).getTime()) / (1000 * 60 * 60 * 24);
-const minutesLeft = Math.max(0, (DISCOUNT_DAYS - daysDiff) * 24 * 60);
-return {
-    expired: daysDiff > DISCOUNT_DAYS,
-    daysLeft: Math.max(0, DISCOUNT_DAYS - daysDiff),
-    minutesLeft: Math.floor(minutesLeft), // ← add this
-    daysSince: daysDiff,
-    qualifiedDate: attr.attribute_value,
-    attrId: attr.id
-};
+    const daysDiff = (Date.now() - new Date(attr.attribute_value).getTime()) / (1000 * 60 * 60 * 24);
+    return {
+        expired: daysDiff > DISCOUNT_DAYS,
+        daysLeft: Math.max(0, DISCOUNT_DAYS - daysDiff),
+        daysSince: daysDiff,
+        qualifiedDate: attr.attribute_value,
+        attrId: attr.id
+    };
 }
 
 // ============ HELPER: SET QUALIFIED DATE ============
@@ -374,11 +370,9 @@ app.post('/webhook', async (req, res) => {
             
             console.log(`   🎉 QUALIFIES!`);
             
-            //const today = new Date().toISOString().split('T')[0];
-            //const expiryDate = new Date(Date.now() + DISCOUNT_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-            const today = new Date().toISOString(); // ← remove the .split('T')[0]
-            const expiryDate = new Date(Date.now() + DISCOUNT_DAYS * 24 * 60 * 60 * 1000).toISOString(); // ← remove the .split('T')[0]     
-
+            const today = new Date().toISOString().split('T')[0];
+            const expiryDate = new Date(Date.now() + DISCOUNT_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            
             console.log(`\n🎊 QUALIFYING ${customerId}`);
             console.log(`   Start: ${today}`);
             console.log(`   End:   ${expiryDate}`);
@@ -427,8 +421,7 @@ setInterval(() => {
 
 // ============ RUN EXPIRY CHECK ============
 checkExpiredVIPCustomers();
-//setInterval(checkExpiredVIPCustomers, 24 * 60 * 60 * 1000);
-setInterval(checkExpiredVIPCustomers, 1 * 60 * 1000);
+setInterval(checkExpiredVIPCustomers, 24 * 60 * 60 * 1000);
 
 // ============ ROOT ROUTE ============
 app.get('/', (req, res) => res.send('VIP Wholesale Discount Server 🚀'));
