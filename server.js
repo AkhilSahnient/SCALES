@@ -423,7 +423,6 @@ setInterval(() => {
 checkExpiredVIPCustomers();
 //setInterval(checkExpiredVIPCustomers, 24 * 60 * 60 * 1000);
 setInterval(checkExpiredVIPCustomers, 1 * 60 * 1000); // every 1 minute
-
 // ============ ROOT ROUTE ============
 app.get('/', (req, res) => res.send('VIP Wholesale Discount Server 🚀'));
 
