@@ -25,7 +25,7 @@ const VIP_GROUP_ID = process.env.VIP_GROUP_ID || 2;
 
 const MIN_QUANTITY = 2000;
 const DISCOUNT_PERCENT = 35;
-const DISCOUNT_DAYS = 0.00694; // 10 minutes (10/60/24)
+const DISCOUNT_DAYS = 90 // 10 minutes (10/60/24)
 
 console.log('CONFIGURATION:');
 console.log('  Store Hash:', BC_STORE_HASH);
