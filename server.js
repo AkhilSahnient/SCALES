@@ -71,6 +71,7 @@ app.get('/api/vip-info', (req, res) => {
 });
 
 // ============ POPUP CHECK ENDPOINT ============
+// ============ POPUP CHECK ENDPOINT ============
 app.get('/api/just-qualified/:customerId', async (req, res) => {
     const customerId = parseInt(req.params.customerId);
     
@@ -98,8 +99,50 @@ app.get('/api/just-qualified/:customerId', async (req, res) => {
         // Get qualification date and check expiry
         const expiry = await checkExpiry(customerId);
         
-        if (!expiry.qualifiedDate || expiry.expired) {
-            console.log(`   ❌ No valid qualification or expired`);
+        // If no date attribute exists, treat as newly qualified
+        if (!expiry.qualifiedDate) {
+            console.log(`   ℹ️  No qualification date found, but customer is in VIP group`);
+            console.log(`   🎉 Treating as newly qualified!`);
+            
+            // Set the current date as qualification date
+            const today = new Date().toISOString();
+            await setQualifiedDate(customerId, today);
+            
+            // Check popup flag
+            const popupAttr = await getPopupAttribute(customerId);
+            const showPopup = popupAttr?.attribute_value === 'true';
+            
+            if (showPopup) {
+                console.log(`   🎉 SHOW POPUP - Just qualified!`);
+                
+                // Reset popup flag after showing
+                await axios.put(`https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`, [{
+                    customer_id: customerId,
+                    attribute_id: parseInt(process.env.POPUP_ATTRIBUTE_ID),
+                    value: 'false'
+                }], {
+                    headers: {
+                        'X-Auth-Token': BC_API_TOKEN,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    }
+                });
+            }
+            
+            return res.json({ 
+                justQualified: showPopup,
+                isVIP: true,
+                daysLeft: DISCOUNT_DAYS,
+                discountPercent: DISCOUNT_PERCENT,
+                qualifiedDate: today
+            });
+        }
+        
+        // Check if expired
+        if (expiry.expired) {
+            console.log(`   ⏰ VIP expired - removing from group`);
+            await removeFromVIPGroup(customerId);
+            await deleteQualificationDate(customerId);
             return res.json({ 
                 justQualified: false,
                 isVIP: false,
@@ -107,30 +150,28 @@ app.get('/api/just-qualified/:customerId', async (req, res) => {
             });
         }
         
-        // Check if RECENTLY qualified (for popup)a
- 
-const popupAttr = await getPopupAttribute(customerId);
-const showPopup = popupAttr?.attribute_value === 'true';
-
-if (showPopup) {
-    console.log(`   🎉 SHOW POPUP - Just qualified! (${expiry.daysLeft.toFixed(0)} days left)`);
-
-    // ✅ Reset popup flag after showing
-    await axios.put(`https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`, [{
-        customer_id: customerId,
-        attribute_id: parseInt(process.env.POPUP_ATTRIBUTE_ID),
-        value: 'false'
-    }], {
-        headers: {
-            'X-Auth-Token': BC_API_TOKEN,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
+        // Check popup flag for qualified customers
+        const popupAttr = await getPopupAttribute(customerId);
+        const showPopup = popupAttr?.attribute_value === 'true';
+        
+        if (showPopup) {
+            console.log(`   🎉 SHOW POPUP - Just qualified! (${expiry.daysLeft.toFixed(0)} days left)`);
+            
+            // Reset popup flag after showing
+            await axios.put(`https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`, [{
+                customer_id: customerId,
+                attribute_id: parseInt(process.env.POPUP_ATTRIBUTE_ID),
+                value: 'false'
+            }], {
+                headers: {
+                    'X-Auth-Token': BC_API_TOKEN,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
+            });
+        } else {
+            console.log(`   ℹ️  Is VIP but popup flag not set (value: ${popupAttr?.attribute_value})`);
         }
-    });
-
-} else {
-    console.log(`   ℹ️  Is VIP but no popup`);
-}
         
         res.json({ 
             justQualified: showPopup,
@@ -142,6 +183,9 @@ if (showPopup) {
         
     } catch (error) {
         console.error(`   ❌ Error:`, error.message);
+        if (error.response) {
+            console.error(`   Response data:`, error.response.data);
+        }
         res.json({ 
             justQualified: false,
             isVIP: false,
@@ -149,7 +193,6 @@ if (showPopup) {
         });
     }
 });
-
 // ============ HELPER: GET QUALIFICATION ATTRIBUTE ============
 async function getQualificationAttribute(customerId) {
     const url = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values?customer_id:in=${customerId}`;
