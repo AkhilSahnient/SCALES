@@ -384,13 +384,24 @@ app.post('/webhook', async (req, res) => {
                 await new Promise(resolve => setTimeout(resolve, 1000));
                 const verifyDate = await checkIfQualified(customerId);
                 
-                if (verifyDate) {
-                    console.log(`   ✅ CONFIRMED`);
-                    
-                    // THIS IS KEY: Add to recentlyQualified for popup
-                    recentlyQualified.set(customerId, Date.now());
-                    console.log(`   🔔 Popup enabled for customer ${customerId}\n`);
-                } else {
+            if (verifyDate) {
+                console.log(`   ✅ CONFIRMED`);
+
+                // ✅ Store popup trigger in BigCommerce attribute
+                await axios.put(`https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`, [{
+                    customer_id: customerId,
+                    attribute_id: parseInt(process.env.POPUP_ATTRIBUTE_ID), // NEW ENV VARIABLE
+                    value: 'true'
+                }], {
+                    headers: {
+                        'X-Auth-Token': BC_API_TOKEN,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    }
+                });
+
+                console.log(`   🔔 Popup flag saved in attribute for customer ${customerId}\n`);
+            } else {
                     console.log('   ⚠️  Could not verify\n');
                 }
             } else {
