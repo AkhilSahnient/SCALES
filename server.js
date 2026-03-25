@@ -107,7 +107,7 @@ app.get('/api/just-qualified/:customerId', async (req, res) => {
             });
         }
         
-        // Check if RECENTLY qualified (for popup)
+        // Check if RECENTLY qualified (for popup)a
  
 const popupAttr = await getPopupAttribute(customerId);
 const showPopup = popupAttr?.attribute_value === 'true';
@@ -482,4 +482,70 @@ app.post('/api/trigger-expiry-check', async (req, res) => {
     res.json({ status: 'done' });
 });
 
+// Add this endpoint to check customer attributes
+app.get('/api/check-customer/:customerId', async (req, res) => {
+    const customerId = parseInt(req.params.customerId);
+    
+    try {
+        // Get all attributes for this customer
+        const attrUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values?customer_id:in=${customerId}`;
+        const attrResponse = await axios.get(attrUrl, { 
+            headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
+        });
+        
+        // Get customer details
+        const customerUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers?id:in=${customerId}`;
+        const customerResponse = await axios.get(customerUrl, { 
+            headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
+        });
+        
+        const customer = customerResponse.data.data[0];
+        
+        res.json({
+            customerId: customerId,
+            customerGroupId: customer?.customer_group_id,
+            expectedVIPGroupId: parseInt(VIP_GROUP_ID),
+            isInVIPGroup: customer?.customer_group_id === parseInt(VIP_GROUP_ID),
+            attributes: attrResponse.data.data,
+            popupAttributeId: parseInt(process.env.POPUP_ATTRIBUTE_ID),
+            dateAttributeId: parseInt(DATE_ATTRIBUTE_ID),
+            popupFlagValue: attrResponse.data.data.find(a => a.attribute_id === parseInt(process.env.POPUP_ATTRIBUTE_ID))?.attribute_value,
+            dateAttributeValue: attrResponse.data.data.find(a => a.attribute_id === parseInt(DATE_ATTRIBUTE_ID))?.attribute_value,
+            allAttributeIds: attrResponse.data.data.map(a => ({ id: a.attribute_id, value: a.attribute_value }))
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
+// Manual endpoint to trigger popup for testing
+app.post('/api/trigger-popup/:customerId', async (req, res) => {
+    const customerId = parseInt(req.params.customerId);
+    
+    if (!process.env.POPUP_ATTRIBUTE_ID) {
+        return res.status(400).json({ error: 'POPUP_ATTRIBUTE_ID not configured' });
+    }
+    
+    try {
+        // Set the popup flag to true
+        await axios.put(`https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`, [{
+            customer_id: customerId,
+            attribute_id: parseInt(process.env.POPUP_ATTRIBUTE_ID),
+            value: 'true'
+        }], {
+            headers: {
+                'X-Auth-Token': BC_API_TOKEN,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+        });
+        
+        res.json({ 
+            success: true, 
+            message: `Popup flag set to 'true' for customer ${customerId}`,
+            popupAttributeId: parseInt(process.env.POPUP_ATTRIBUTE_ID)
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
