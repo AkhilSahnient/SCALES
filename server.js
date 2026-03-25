@@ -108,14 +108,29 @@ app.get('/api/just-qualified/:customerId', async (req, res) => {
         }
         
         // Check if RECENTLY qualified (for popup)
-        const showPopup = recentlyQualified.has(customerId);
-        
-        if (showPopup) {
-            recentlyQualified.delete(customerId);
-            console.log(`   🎉 SHOW POPUP - Just qualified! (${expiry.daysLeft.toFixed(0)} days left)`);
-        } else {
-            console.log(`   ℹ️  Is VIP but no popup (qualified ${expiry.daysSince?.toFixed(0)} days ago)`);
+ 
+const popupAttr = await getPopupAttribute(customerId);
+const showPopup = popupAttr?.attribute_value === 'true';
+
+if (showPopup) {
+    console.log(`   🎉 SHOW POPUP - Just qualified! (${expiry.daysLeft.toFixed(0)} days left)`);
+
+    // ✅ Reset popup flag after showing
+    await axios.put(`https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`, [{
+        customer_id: customerId,
+        attribute_id: parseInt(process.env.POPUP_ATTRIBUTE_ID),
+        value: 'false'
+    }], {
+        headers: {
+            'X-Auth-Token': BC_API_TOKEN,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
         }
+    });
+
+} else {
+    console.log(`   ℹ️  Is VIP but no popup`);
+}
         
         res.json({ 
             justQualified: showPopup,
@@ -148,6 +163,21 @@ async function getQualificationAttribute(customerId) {
         ) || null;
     } catch (error) {
         console.error('   Error getting attribute:', error.message);
+        return null;
+    }
+}
+
+async function getPopupAttribute(customerId) {
+    const url = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values?customer_id:in=${customerId}`;
+    try {
+        const response = await axios.get(url, { 
+            headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
+        });
+        return response.data.data.find(av => 
+            av.attribute_id === parseInt(process.env.POPUP_ATTRIBUTE_ID)
+        ) || null;
+    } catch (error) {
+        console.error('Error getting popup attribute:', error.message);
         return null;
     }
 }
