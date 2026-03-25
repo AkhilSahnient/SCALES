@@ -549,3 +549,50 @@ app.post('/api/trigger-popup/:customerId', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+// Add this endpoint to fix missing popup flags
+app.post('/api/fix-missing-popups', async (req, res) => {
+    try {
+        // Get all customers in VIP group
+        const customersUrl = `https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers?customer_group_id:in=${VIP_GROUP_ID}`;
+        const customersResponse = await axios.get(customersUrl, { 
+            headers: { 'X-Auth-Token': BC_API_TOKEN, 'Accept': 'application/json' }
+        });
+        
+        const vipCustomers = customersResponse.data.data;
+        console.log(`Found ${vipCustomers.length} VIP customers`);
+        
+        let fixed = 0;
+        for (const customer of vipCustomers) {
+            // Check if popup flag exists
+            const popupAttr = await getPopupAttribute(customer.id);
+            
+            if (!popupAttr || popupAttr.attribute_value !== 'true') {
+                // Set popup flag
+                await axios.put(`https://api.bigcommerce.com/stores/${BC_STORE_HASH}/v3/customers/attribute-values`, [{
+                    customer_id: customer.id,
+                    attribute_id: parseInt(process.env.POPUP_ATTRIBUTE_ID),
+                    value: 'true'
+                }], {
+                    headers: {
+                        'X-Auth-Token': BC_API_TOKEN,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    }
+                });
+                fixed++;
+                console.log(`   ✅ Set popup flag for customer ${customer.id}`);
+            }
+        }
+        
+        res.json({ 
+            success: true, 
+            message: `Set popup flag for ${fixed} customers`,
+            totalVIP: vipCustomers.length,
+            fixed: fixed
+        });
+    } catch (error) {
+        console.error('Error:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
