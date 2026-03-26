@@ -1274,6 +1274,36 @@ app.post('/api/fix-missing-popups', async (req, res) => {
     }
 });
 
+// Add this to server.js to debug expiry
+app.get('/api/debug-expiry/:customerId', async (req, res) => {
+    const customerId = parseInt(req.params.customerId);
+    
+    try {
+        const attr = await getQualificationAttribute(customerId);
+        if (!attr) {
+            return res.json({ error: 'No qualification date found' });
+        }
+        
+        const qualifiedTime = new Date(attr.attribute_value).getTime();
+        const currentTime = Date.now();
+        const elapsedMs = currentTime - qualifiedTime;
+        const elapsedMinutes = elapsedMs / (1000 * 60);
+        
+        res.json({
+            customerId: customerId,
+            qualifiedDate: attr.attribute_value,
+            qualifiedTimestamp: qualifiedTime,
+            currentTimestamp: currentTime,
+            elapsedMinutes: elapsedMinutes,
+            discountMinutes: DISCOUNT_MINUTES,
+            shouldBeExpired: elapsedMinutes > DISCOUNT_MINUTES,
+            minutesUntilExpiry: Math.max(0, DISCOUNT_MINUTES - elapsedMinutes)
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ============ START SERVER ============
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
